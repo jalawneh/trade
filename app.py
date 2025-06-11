@@ -54,89 +54,98 @@ def show_risk_allocation():
             st.session_state.high_risk = high
             st.success("✅ Allocations saved.")
 
-# --- Profit Plan ---
 def show_profit_plan():
-    st.title("💰 Generate Profit Plan")
-    if 'top10' not in st.session_state:
-        st.warning("You must run the market scan first.")
-        return
+    import time
 
-    top10 = st.session_state['top10']
-    target = 100
-    budget = 3000
-    low_pct = st.session_state.low_risk
-    med_pct = st.session_state.med_risk
-    high_pct = st.session_state.high_risk
+    st.title("💰 Smart Profit Plan")
 
-    budgets = {
-        'low': budget * low_pct / 100,
-        'med': budget * med_pct / 100,
-        'high': budget * high_pct / 100
-    }
+    def get_ranked_candidates():
+        top = st.session_state['top10']
+        top['Risk Score'] = top.apply(lambda r: (10 - r['AI Recommendation (0–10)']) + r['Volatility (%)'] / 10, axis=1)
+        return top.sort_values(by=['Risk Score', 'AI Recommendation (0–10)'], ascending=[True, False]).copy()
 
-    st.info(f"💼 Allocation: Low {low_pct}%, Med {med_pct}%, High {high_pct}%")
-    fig, ax = plt.subplots()
-    ax.pie(budgets.values(), labels=budgets.keys(), autopct='%1.1f%%')
-    st.pyplot(fig)
+    def simulate_plan(candidates, budget, target_profit):
+        plan = []
+        total_spent = total_profit = 0
+        used_tickers = set()
 
-    top10['Risk Score'] = top10.apply(lambda r: (10 - r['AI Recommendation (0–10)']) + r['Volatility (%)'] / 10, axis=1)
-    top10['Risk Tier'] = top10['Risk Score'].apply(lambda s: 'low' if s <= 4 else 'med' if s <= 6 else 'high')
-
-    spent = {t: 0 for t in budgets}
-    profit = {t: 0 for t in budgets}
-    plan = []
-    total_spent = total_profit = 0
-
-    for tier in ['low', 'med', 'high']:
-        df_tier = top10[top10['Risk Tier'] == tier].sort_values('AI Recommendation (0–10)', ascending=False)
-        tier_budget = budgets[tier]
-
-        for _, r in df_tier.iterrows():
-            price = r['Last Close ($)']
-            move = max(3, r['Volatility (%)']) / 2
-            max_shares = int((tier_budget - spent[tier]) / price)
+        for _, row in candidates.iterrows():
+            if row['Ticker'] in used_tickers:
+                continue
+            price = row['Last Close ($)']
+            move = max(3, row['Volatility (%)']) / 2
+            max_shares = int((budget - total_spent) / price)
             if max_shares <= 0:
                 continue
 
             invest = max_shares * price
             sell_price = price * (1 + move / 100)
-            prof = (sell_price - price) * max_shares
-            roi = prof / invest if invest > 0 else 0
+            profit = (sell_price - price) * max_shares
+            roi = profit / invest if invest > 0 else 0
 
-            if prof < 5 or roi < 0.02 or invest < 50:
+            if profit < 5 or roi < 0.02 or invest < 50:
                 continue
 
-            spent[tier] += invest
-            profit[tier] += prof
-            total_spent += invest
-            total_profit += prof
             plan.append({
-                'Ticker': r['Ticker'], 'Buy': round(price, 2), 'Sell': round(sell_price, 2),
-                'Shares': max_shares, 'Invest': round(invest, 2), 'Profit': round(prof, 2),
-                'AI Score': r['AI Recommendation (0–10)'],
-                'Volatility %': r['Volatility (%)'],
-                'Risk Tier': tier.capitalize()
+                'Ticker': row['Ticker'], 'Buy': round(price, 2), 'Sell': round(sell_price, 2),
+                'Shares': max_shares, 'Invest': round(invest, 2), 'Profit': round(profit, 2),
+                'AI Score': row['AI Recommendation (0–10)'],
+                'Volatility %': row['Volatility (%)'],
+                'Risk Score': round(row['Risk Score'], 2)
             })
 
-            if total_profit >= target:
+            used_tickers.add(row['Ticker'])
+            total_spent += invest
+            total_profit += profit
+
+            if total_profit >= target_profit and len(plan) >= 3:
                 break
 
-    df = pd.DataFrame(plan)
+        return plan, total_spent, total_profit
 
+    # Run initial scan-based plan
+    if 'top10' not in st.session_state:
+        st.warning("⚠️ Please scan the market first.")
+        return
+
+    candidates = get_ranked_candidates()
+    full_pool = candidates.copy()
+    attempt = 0
+
+    while attempt < 3:
+        plan, spent, profit = simulate_plan(full_pool, 3000, 100)
+
+        if profit >= 100 and len(plan) >= 3:
+            break
+
+        # Retry: append more results from another scan
+        st.info(f"🔁 Attempt {attempt+2}: Trying with more candidates...")
+        tickers = fetch_movers()
+        new_candidates = []
+        for ticker in tickers:
+            if ticker not in full_pool['Ticker'].values:
+                data = analyze_stock(ticker)
+                if data:
+                    new_candidates.append(data)
+            if len(new_candidates) >= 15:
+                break
+        if not new_candidates:
+            break
+        df_new = pd.DataFrame(new_candidates)
+        df_new['AI Recommendation (0–10)'] = 5
+        df_new['Risk Score'] = df_new.apply(lambda r: (10 - 5) + r['Volatility (%)'] / 10, axis=1)
+        full_pool = pd.concat([full_pool, df_new], ignore_index=True)
+        attempt += 1
+        time.sleep(1)
+
+    df = pd.DataFrame(plan)
     st.markdown("### 📊 Profit Plan Summary")
-    if total_profit < target:
-        st.warning(f"⚠️ Only ${total_profit:.2f} profit (< ${target} goal)")
+    if profit < 100:
+        st.warning(f"⚠️ Only ${profit:.2f} profit achieved (< $100 goal)")
     else:
-        st.success(f"🎯 Goal Met: ${total_profit:.2f} profit using ${total_spent:.2f}")
+        st.success(f"🎯 Goal Met: ${profit:.2f} profit using ${spent:.2f}")
 
     st.dataframe(df, use_container_width=True)
-
-    fig2, ax2 = plt.subplots()
-    ax2.bar(profit.keys(), profit.values())
-    ax2.set_title("Profit by Tier")
-    st.pyplot(fig2)
-
-
 
 # --- Fetch Yahoo Finance Movers ---
 @st.cache_data(ttl=900)
@@ -178,9 +187,10 @@ def analyze_stock(ticker):
     except:
         return None
 
-# --- Scan Market Function ---
+# --- Scan Market Function with Download ---
 def scan_market():
     import concurrent.futures
+    from io import StringIO
 
     with st.spinner("Scanning market and analyzing stocks..."):
         tickers = fetch_movers()
@@ -189,14 +199,14 @@ def scan_market():
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             results = list(executor.map(analyze_stock, tickers))
 
-        # Strict filter first
+        # Strict filter
         results = [r for r in results if r and r["Volume"] > 1_000_000 and r["Volatility (%)"] > 3 and 1 < r["Last Close ($)"] < 200]
 
-        # Relax filter if too few results
+        # Relaxed filter if too few
         if len(results) < 10:
             with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-                relaxed_results = list(executor.map(analyze_stock, tickers))
-            results = [r for r in relaxed_results if r and r["Volume"] > 500_000 and r["Volatility (%)"] > 2 and 0.5 < r["Last Close ($)"] < 300]
+                relaxed = list(executor.map(analyze_stock, tickers))
+            results = [r for r in relaxed if r and r["Volume"] > 500_000 and r["Volatility (%)"] > 2 and 0.5 < r["Last Close ($)"] < 300]
 
         df = pd.DataFrame(results)
 
@@ -209,14 +219,11 @@ def scan_market():
             df["Volatility (%)"] * 0.3 +
             (df["Volume"] / 1_000_000) * 0.2
         )
-
         df['AI Recommendation (0–10)'] = 0
         df['AI Notes'] = ""
 
-        # GPT prompt generation and score extraction
         def get_ai_analysis(row):
-            prompt = f"""
-You are an elite day trader AI. Analyze this stock briefly:
+            prompt = f"""You are an elite day trader AI. Analyze this stock:
 
 - Ticker: {row['Ticker']}
 - Company: {row['Company Name']}
@@ -225,34 +232,39 @@ You are an elite day trader AI. Analyze this stock briefly:
 - Change: {row['Change (%)']}%
 - Volatility: {row['Volatility (%)']}%
 
-Reply concisely with:
-1. Why it was picked.
-2. Why score and volatility matter.
-3. Who the trade fits.
-4. Final score (0–10).
-"""
+Reply with:
+1. Why picked
+2. Risk significance
+3. Who fits
+4. Final score (0–10)"""
             ai_text = call_openai_chat(prompt)
             match = re.search(r"score.*?(\d{1,2})", ai_text, re.IGNORECASE)
             score = int(match.group(1)) if match else 0
             return ai_text, min(score, 10)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-            gpt_results = list(executor.map(get_ai_analysis, [row for _, row in df.iterrows()]))
+            ai_results = list(executor.map(get_ai_analysis, [row for _, row in df.iterrows()]))
 
-        for i, (ai_text, score) in enumerate(gpt_results):
-            df.at[i, 'AI Notes'] = ai_text
+        for i, (text, score) in enumerate(ai_results):
+            df.at[i, 'AI Notes'] = text
             df.at[i, 'AI Recommendation (0–10)'] = score
 
-        top5 = df.sort_values(by="AI Recommendation (0–10)", ascending=False).head(15)
-        st.session_state['top10'] = top5
+        top15 = df.sort_values(by="AI Recommendation (0–10)", ascending=False).head(15)
+        st.session_state['top10'] = top15
         st.success("Top 15 Stocks Identified ✅")
-        st.dataframe(top5, use_container_width=True)
+        st.dataframe(top15, use_container_width=True)
 
-        for i, row in top5.reset_index().iterrows():
+        # Add download button for .txt export
+        buffer = StringIO()
+        top15.to_string(buf=buffer, index=False)
+        st.download_button("📥 Download TXT", buffer.getvalue(), file_name="top15_stock_analysis.txt", mime="text/plain")
+
+        # Display charts and AI notes
+        for i, row in top15.reset_index().iterrows():
             col1, col2 = st.columns([2, 1])
             with col1:
                 st.subheader(f"{i+1}. {row['Ticker']} - {row['Company Name']}")
-                st.markdown(f"**Sector**: {row['Sector']}  \\n**Volume**: {row['Volume']:,}  \\n**Change**: {row['Change (%)']}%  \\n**Volatility**: {row['Volatility (%)']}%  \\n**AI Score**: {row['AI Recommendation (0–10)']}")
+                st.markdown(f"**Sector**: {row['Sector']}  \n**Volume**: {row['Volume']:,}  \n**Change**: {row['Change (%)']}%  \n**Volatility**: {row['Volatility (%)']}%  \n**AI Score**: {row['AI Recommendation (0–10)']}")
                 with st.expander("📘 AI Notes"):
                     st.markdown(row["AI Notes"])
             with col2:
@@ -271,17 +283,128 @@ Reply concisely with:
                         ax_big.set_title(f"{row['Ticker']} - Last 14 Days (30m)")
                         ax_big.grid(True)
                         st.pyplot(fig_big)
-            st.markdown("---")
+import datetime
+import streamlit as st
+import requests
+from bs4 import BeautifulSoup
+from email.utils import parsedate_to_datetime
+import pytz
+from serpapi import GoogleSearch
 
-# --- GPT Summary ---
+# --- Market Headlines Summary from Yahoo, CNBC, Reuters, Bloomberg, Google News ---
 def show_gpt_summary():
-    st.title("🤖 GPT Market Summary")
-    with st.spinner("Calling GPT..."):
-        prompt = "Give a 2-line summary of today's US stock market outlook."
-        result = call_openai_chat(prompt)
-        st.markdown("### 🧠 GPT Output")
-        st.write(result)
+    st.title("\U0001F4F0 Market News Summary")
 
+    central = pytz.timezone("US/Central")
+    now = datetime.datetime.now(central)
+    now_str = now.strftime('%B %d, %Y at %I:%M %p %Z')
+    today = now.date()
+
+    st.info(f"\U0001F553 Searching for U.S. market-moving news for {today}...")
+
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    all_headlines = []
+
+    # --- Yahoo Finance ---
+    try:
+        r1 = requests.get("https://finance.yahoo.com/news/", headers=headers)
+        r1.raise_for_status()
+        soup1 = BeautifulSoup(r1.text, "html.parser")
+        articles = soup1.select("li.js-stream-content")[:20]
+        for art in articles:
+            title_tag = art.select_one("h3 a")
+            time_tag = art.select_one("time")
+            if title_tag and title_tag.has_attr("href"):
+                headline = title_tag.get_text(strip=True)
+                link = "https://finance.yahoo.com" + title_tag['href']
+                timestamp_raw = time_tag["datetime"] if time_tag and time_tag.has_attr("datetime") else None
+                try:
+                    timestamp = datetime.datetime.fromisoformat(timestamp_raw.replace('Z', '+00:00')).astimezone(central) if timestamp_raw else now
+                except:
+                    timestamp = now
+                if (now - timestamp).total_seconds() <= 86400:
+                    all_headlines.append((headline, link, "Yahoo Finance", timestamp.strftime('%Y-%m-%d %I:%M %p %Z')))
+    except Exception as e:
+        st.warning(f"Yahoo scrape error: {e}")
+
+    # --- CNBC ---
+    try:
+        r2 = requests.get("https://www.cnbc.com/markets/", headers=headers)
+        r2.raise_for_status()
+        soup2 = BeautifulSoup(r2.text, "html.parser")
+        articles = soup2.select("a.Card-title")[:20]
+        for a in articles:
+            headline = a.get_text(strip=True)
+            link = a['href'] if a.has_attr("href") else "https://www.cnbc.com/markets/"
+            timestamp = now
+            all_headlines.append((headline, link, "CNBC", timestamp.strftime('%Y-%m-%d %I:%M %p %Z')))
+    except Exception as e:
+        st.warning(f"CNBC scrape error: {e}")
+
+    # --- Reuters via Google News RSS fallback ---
+    try:
+        rss_url = "https://news.google.com/rss/search?q=site:reuters.com+business&hl=en-US&gl=US&ceid=US:en"
+        r3 = requests.get(rss_url, headers=headers)
+        r3.raise_for_status()
+        soup3 = BeautifulSoup(r3.content, features="xml")
+        items = soup3.find_all("item")[:10]
+        for item in items:
+            headline = item.title.text
+            link = item.link.text
+            pub_date = parsedate_to_datetime(item.pubDate.text).astimezone(central)
+            if (now - pub_date).total_seconds() <= 86400:
+                all_headlines.append((headline, link, "Reuters (via Google News)", pub_date.strftime('%Y-%m-%d %I:%M %p %Z')))
+    except Exception as e:
+        st.warning(f"Reuters RSS fallback error: {e}")
+
+    # --- Bloomberg ---
+    try:
+        r4 = requests.get("https://www.bloomberg.com/markets", headers=headers)
+        r4.raise_for_status()
+        soup4 = BeautifulSoup(r4.text, "html.parser")
+        articles = soup4.select("a[data-testid='StoryModuleHeadlineLink']")[:20]
+        for a in articles:
+            headline = a.get_text(strip=True)
+            link = "https://www.bloomberg.com" + a['href'] if a.has_attr("href") else "https://www.bloomberg.com/markets"
+            timestamp = now
+            all_headlines.append((headline, link, "Bloomberg", timestamp.strftime('%Y-%m-%d %I:%M %p %Z')))
+    except Exception as e:
+        st.warning(f"Bloomberg scrape error: {e}")
+
+    # --- Google News via SerpAPI ---
+    try:
+        serpapi_key = "c4e703d9f24d9f5aafe8e587286bf44e78295385165f5f42744904eab142d337"
+        if serpapi_key:
+            params = {
+                "engine": "google_news",
+                "q": f"US stock market {today}",
+                "api_key": serpapi_key
+            }
+            search = GoogleSearch(params)
+            results = search.get_dict()
+            for article in results.get("news_results", [])[:10]:
+                title = article.get("title")
+                link = article.get("link")
+                source = article.get("source")
+                date_str = article.get("date") or now_str
+                all_headlines.append((title, link, f"Google News ({source})", date_str))
+    except Exception as e:
+        st.warning(f"Google News search error: {e}")
+
+    # Filter and summarize
+    key_terms = ["fed", "inflation", "rate", "earnings", "geopolitical", "jobs", "cpi", "gdp", "conflict", "oil"]
+    relevant = [(h, l, src, t) for h, l, src, t in all_headlines if any(k in h.lower() for k in key_terms)]
+
+    st.markdown("### \U0001F9E0 Summary")
+    st.markdown(f"**Report Generated:** {now_str}")
+
+    if relevant:
+        st.markdown("\n".join([f"- [{h}]({l}) ({src}, {t})" for h, l, src, t in relevant[:10]]))
+    elif all_headlines:
+        st.markdown("No keyword matches. Top general headlines:")
+        st.markdown("\n".join([f"- [{h}]({l}) ({src}, {t})" for h, l, src, t in all_headlines[:10]]))
+    else:
+        st.markdown("❌ No headlines retrieved.")
 
 # --- Main Page Title ---
 st.markdown(
@@ -317,10 +440,7 @@ elif choice == "Generate Profit Plan":
     show_profit_plan()
 
 elif choice == "GPT Market Summary":
-    with st.spinner("Calling GPT..."):
-        result = call_openai_chat("Give a 2-line summary of today's US stock market outlook.")
-        st.subheader("🧠 GPT Market Summary")
-        st.write(result)
+    show_gpt_summary()
 
 # Note: do not execute any action if "-- Select an Action --" is chosen
 
