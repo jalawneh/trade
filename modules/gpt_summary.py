@@ -45,11 +45,10 @@ def show_gpt_summary():
         except Exception as e:
             st.warning(f"{source_name} error: {e}")
 
-    parse_source("https://finance.yahoo.com/news/", "li.js-stream-content h3 a", "Yahoo Finance", "https://finance.yahoo.com")
-    parse_source("https://www.cnbc.com/markets/", "a.Card-title", "CNBC")
     parse_source("https://news.google.com/rss/search?q=site:reuters.com+business&hl=en-US&gl=US&ceid=US:en", "", "Reuters", rss=True)
     parse_source("https://www.bloomberg.com/markets", "a[data-testid='StoryModuleHeadlineLink']", "Bloomberg", "https://www.bloomberg.com")
-
+    parse_source("https://finance.yahoo.com/news/", "li.js-stream-content h3 a", "Yahoo Finance", "https://finance.yahoo.com")
+    
     try:
         serpapi_key = "c4e703d9f24d9f5aafe8e587286bf44e78295385165f5f42744904eab142d337"
         if serpapi_key:
