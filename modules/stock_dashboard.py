@@ -5,6 +5,7 @@ import plotly.graph_objects as go
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
+from utils.openai_helper import get_stock_summary, get_risk_assessment, get_momentum_analysis, get_sentiment_analysis
 
 
 def get_analyst_ratings(ticker):
@@ -24,7 +25,7 @@ def get_analyst_ratings(ticker):
             'Low Target Price': target_low_price,
             'High Target Price': target_high_price
         }
-    except Exception as e:
+    except Exception:
         return {
             'Consensus': 'N/A',
             'Number of Analyst Opinions': 'N/A',
@@ -45,7 +46,7 @@ def get_sentiment_summary(ticker):
             'Sentiment Score': sentiment_score,
             'Sentiment Trend': sentiment_trend
         }
-    except Exception as e:
+    except Exception:
         return {
             'Sentiment Score': 'N/A',
             'Sentiment Trend': 'N/A'
@@ -133,10 +134,15 @@ def display_stock_dashboard(ticker):
     st.markdown(f"- **Price Target Range**: ${ratings['Low Target Price']} – ${ratings['High Target Price']}")
 
     # Sentiment Summary
-    st.markdown("### 🗭 Sentiment Summary")
+    st.markdown("### 🗝 Sentiment Summary")
     sentiment = get_sentiment_summary(ticker)
     st.markdown(f"- **Sentiment Score**: {sentiment['Sentiment Score']}")
     st.markdown(f"- **Sentiment Trend**: {sentiment['Sentiment Trend']}")
+
+    # AI Summary
+    st.markdown("### 🤖 AI Insights")
+    ai_summary = get_stock_summary(ticker, f"Price={price}, Volatility={info.get('beta', 'N/A')}, Sector={info.get('sector', 'N/A')}")
+    st.markdown(ai_summary)
 
     # News
     st.markdown("### 📰 Recent News")

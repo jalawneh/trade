@@ -2,8 +2,11 @@
 import streamlit as st
 import pandas as pd
 import yfinance as yf
+import os
 from modules.stock_dashboard import display_stock_dashboard
+from utils.openai_helper import get_final_score_justification
 
+USE_OPENAI = os.getenv("USE_OPENAI", "False").lower() == "true"
 
 def show_profit_plan():
     st.title("\U0001F4B0 Smart Profit Plan")
@@ -29,10 +32,13 @@ def show_profit_plan():
 
         for row in plan:
             display_stock_dashboard(row['Ticker'])
+            if USE_OPENAI:
+                st.markdown("### 🧠 AI Score Justification")
+                justification = get_final_score_justification(str(row))
+                st.info(justification)
 
     else:
         st.warning("Unable to generate a profit plan with the current data.")
-
 
 def simulate_plan(candidates, budget=3000):
     plan = []

@@ -7,6 +7,10 @@ import matplotlib.pyplot as plt
 import concurrent.futures
 from io import StringIO
 from modules.scan_utils import fetch_movers, analyze_stock
+from utils.openai_helper import generate_ai_score
+import os
+
+USE_OPENAI = os.getenv("USE_OPENAI", "false").lower() == "true"
 
 def scan_market():
     st.markdown("## 🔍 Market Scan Results")
@@ -54,7 +58,11 @@ def scan_market():
     df['AI Recommendation (0–10)'] = 0
     df['AI Notes'] = ""
 
-    ai_results = [("", 0)] * len(df)  # Skipping OpenAI call
+    if USE_OPENAI and st.session_state.get("use_ai", True):
+        ai_results = [generate_ai_score(row) for _, row in df.iterrows()]
+    else:
+        ai_results = [("", 0)] * len(df)
+
     for i, (text, score) in enumerate(ai_results):
         df.at[i, 'AI Notes'] = text
         df.at[i, 'AI Recommendation (0–10)'] = score

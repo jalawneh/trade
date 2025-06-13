@@ -17,6 +17,7 @@ init_allocation_state()
 # --- Sidebar Menu ---
 choice = display_sidebar()
 
+
 # --- Action Routing ---
 if choice == "Scan Market":
     scan_market()

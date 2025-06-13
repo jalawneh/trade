@@ -7,6 +7,38 @@ from email.utils import parsedate_to_datetime
 import pytz
 import datetime
 from serpapi import GoogleSearch
+import os
+
+def parse_source(url, selector, source_name, prefix="https://", rss=False):
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    all_headlines = []
+    central = pytz.timezone("US/Central")
+    now = datetime.datetime.now(central)
+
+    try:
+        r = requests.get(url, headers=headers)
+        r.raise_for_status()
+        if rss:
+            soup = BeautifulSoup(r.content, features="xml")
+            items = soup.find_all("item")[:10]
+            for item in items:
+                headline = item.title.text
+                link = item.link.text
+                pub_date = parsedate_to_datetime(item.pubDate.text).astimezone(central)
+                if (now - pub_date).total_seconds() <= 86400:
+                    all_headlines.append((headline, link, source_name, pub_date.strftime('%Y-%m-%d %I:%M %p %Z')))
+        else:
+            soup = BeautifulSoup(r.text, "html.parser")
+            articles = soup.select(selector)[:20]
+            for a in articles:
+                headline = a.get_text(strip=True)
+                href = a.get("href")
+                link = href if href.startswith("http") else prefix + href
+                all_headlines.append((headline, link, source_name, now.strftime('%Y-%m-%d %I:%M %p %Z')))
+    except Exception as e:
+        st.warning(f"{source_name} error: {e}")
+
+    return all_headlines
 
 def show_gpt_summary():
     st.title("📰 Market News Summary")
@@ -18,39 +50,13 @@ def show_gpt_summary():
 
     st.info(f"🕒 Fetching market-moving news for {today}...")
 
-    headers = {'User-Agent': 'Mozilla/5.0'}
     all_headlines = []
+    all_headlines += parse_source("https://news.google.com/rss/search?q=site:reuters.com+business&hl=en-US&gl=US&ceid=US:en", "", "Reuters", rss=True)
+    all_headlines += parse_source("https://www.bloomberg.com/markets", "a[data-testid='StoryModuleHeadlineLink']", "Bloomberg", "https://www.bloomberg.com")
+    all_headlines += parse_source("https://finance.yahoo.com/news/", "li.js-stream-content h3 a", "Yahoo Finance", "https://finance.yahoo.com")
 
-    def parse_source(url, selector, source_name, prefix="https://", rss=False):
-        try:
-            r = requests.get(url, headers=headers)
-            r.raise_for_status()
-            if rss:
-                soup = BeautifulSoup(r.content, features="xml")
-                items = soup.find_all("item")[:10]
-                for item in items:
-                    headline = item.title.text
-                    link = item.link.text
-                    pub_date = parsedate_to_datetime(item.pubDate.text).astimezone(central)
-                    if (now - pub_date).total_seconds() <= 86400:
-                        all_headlines.append((headline, link, source_name, pub_date.strftime('%Y-%m-%d %I:%M %p %Z')))
-            else:
-                soup = BeautifulSoup(r.text, "html.parser")
-                articles = soup.select(selector)[:20]
-                for a in articles:
-                    headline = a.get_text(strip=True)
-                    href = a.get("href")
-                    link = href if href.startswith("http") else prefix + href
-                    all_headlines.append((headline, link, source_name, now.strftime('%Y-%m-%d %I:%M %p %Z')))
-        except Exception as e:
-            st.warning(f"{source_name} error: {e}")
-
-    parse_source("https://news.google.com/rss/search?q=site:reuters.com+business&hl=en-US&gl=US&ceid=US:en", "", "Reuters", rss=True)
-    parse_source("https://www.bloomberg.com/markets", "a[data-testid='StoryModuleHeadlineLink']", "Bloomberg", "https://www.bloomberg.com")
-    parse_source("https://finance.yahoo.com/news/", "li.js-stream-content h3 a", "Yahoo Finance", "https://finance.yahoo.com")
-    
     try:
-        serpapi_key = "c4e703d9f24d9f5aafe8e587286bf44e78295385165f5f42744904eab142d337"
+        serpapi_key = os.getenv("SERPAPI_KEY")
         if serpapi_key:
             params = {
                 "engine": "google_news",
