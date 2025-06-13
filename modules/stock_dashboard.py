@@ -7,9 +7,11 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from utils.openai_helper import get_stock_summary, get_risk_assessment, get_momentum_analysis, get_sentiment_analysis
 import os
+from textblob import TextBlob  # Ensure TextBlob is imported for sentiment analysis
 
 USE_OPENAI = os.getenv("USE_OPENAI", "false").lower() == "true"
 
+# Ensure the get_analyst_ratings function is defined here
 def get_analyst_ratings(ticker):
     stock = yf.Ticker(ticker)
     try:
@@ -36,61 +38,96 @@ def get_analyst_ratings(ticker):
             'High Target Price': 'N/A'
         }
 
-def get_sentiment_summary(ticker):
+# Web scraping function for stock-specific news
+def scrape_stock_news(ticker):
+    articles = []
+    
+    # Fetch from Yahoo Finance
     try:
-        response = requests.get(f'https://api.swaggystocks.com/api/v1/sentiment/{ticker}')
-        data = response.json()
-        sentiment_score = data.get('sentiment_score', 'N/A')
-        sentiment_trend = data.get('sentiment_trend', 'N/A')
+        url = f'https://finance.yahoo.com/quote/{ticker}/news?p={ticker}'
+        response = requests.get(url)
+        soup = BeautifulSoup(response.content, 'html.parser')
 
-        ai_sentiment = ""
-        if USE_OPENAI:
-            headlines = fetch_news_headlines(ticker)
-            if headlines:
-                combined_headlines = "\n".join([h[0] for h in headlines])
-                ai_sentiment = get_sentiment_analysis(combined_headlines)
-
-        return {
-            'Sentiment Score': sentiment_score,
-            'Sentiment Trend': sentiment_trend,
-            'AI Summary': ai_sentiment
-        }
-    except Exception:
-        return {
-            'Sentiment Score': 'N/A',
-            'Sentiment Trend': 'N/A',
-            'AI Summary': ''
-        }
-
-def fetch_news_headlines(ticker):
-    headlines = []
+        for item in soup.find_all('h3'):
+            title = item.get_text()
+            link = item.find('a')['href']
+            articles.append({'title': title, 'link': f'https://finance.yahoo.com{link}'})
+    except Exception as e:
+        print(f"Error fetching Yahoo Finance news: {e}")
+    
+    # Fetch from Google News
     try:
-        # Google News RSS
-        query = ticker + " stock"
+        query = f"{ticker} stock"
         url = f"https://news.google.com/rss/search?q={query.replace(' ', '+')}+when:7d&hl=en-US&gl=US&ceid=US:en"
         response = requests.get(url)
         soup = BeautifulSoup(response.content, features="xml")
         items = soup.find_all("item")
-        headlines += [(item.title.text, item.link.text) for item in items[:3]]
-    except:
-        pass
-
+        for item in items[:3]:  # Limit to 3 articles
+            title = item.title.text
+            link = item.link.text
+            articles.append({'title': title, 'link': link})
+    except Exception as e:
+        print(f"Error fetching Google News: {e}")
+    
+    # Fetch from Bloomberg
     try:
-        # Bloomberg Fallback
         url = f"https://www.bloomberg.com/search?query={ticker}"
         res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"})
         soup = BeautifulSoup(res.text, "html.parser")
-        articles = soup.select("article a")[:3]
-        for art in articles:
+        articles_bloomberg = soup.select("article a")[:3]  # Limit to 3 articles
+        for art in articles_bloomberg:
             title = art.get_text(strip=True)
-            link = "https://www.bloomberg.com" + art['href']
-            headlines.append((title, link))
-    except:
-        pass
+            link = f"https://www.bloomberg.com{art['href']}"
+            articles.append({'title': title, 'link': link})
+    except Exception as e:
+        print(f"Error fetching Bloomberg news: {e}")
+    
+    return articles
 
-    return headlines
+# Sentiment analysis function
+def analyze_sentiment(articles):
+    sentiments = []
+    for article in articles:
+        text = article['title']
+        blob = TextBlob(text)
+        polarity = blob.sentiment.polarity
+        sentiment = 'Neutral'
+        if polarity > 0:
+            sentiment = 'Bullish'
+        elif polarity < 0:
+            sentiment = 'Bearish'
+        sentiments.append({'title': article['title'], 'sentiment': sentiment, 'polarity': polarity})
+    return sentiments
 
-def display_stock_dashboard(ticker):
+# Function to get market sentiment for a specific stock
+def get_stock_sentiment(ticker):
+    articles = scrape_stock_news(ticker)
+    sentiments = analyze_sentiment(articles)
+
+    bullish_count = sum(1 for sentiment in sentiments if sentiment['sentiment'] == 'Bullish')
+    bearish_count = sum(1 for sentiment in sentiments if sentiment['sentiment'] == 'Bearish')
+
+    if bullish_count > bearish_count:
+        sentiment_score = 7
+        trend_label = 'Bullish'
+    elif bearish_count > bullish_count:
+        sentiment_score = 3
+        trend_label = 'Bearish'
+    else:
+        sentiment_score = 5
+        trend_label = 'Neutral'
+
+    key_drivers = []
+    if bullish_count > bearish_count:
+        key_drivers.append(f"Positive sentiment surrounding {ticker} driven by news on growth prospects.")
+    elif bearish_count > bullish_count:
+        key_drivers.append(f"Negative sentiment on {ticker} due to concerns about earnings and market performance.")
+    else:
+        key_drivers.append(f"Mixed sentiment for {ticker}, no strong direction from the news.")
+
+    return sentiment_score, trend_label, sentiments, key_drivers
+
+def display_stock_dashboard(ticker):  # Ensure ticker is passed as a parameter
     st.markdown(f"## 📊 {ticker.upper()} Stock Dashboard (NYSE: {ticker.upper()})")
 
     stock = yf.Ticker(ticker)
@@ -141,24 +178,14 @@ def display_stock_dashboard(ticker):
     st.markdown(f"- **Average Target Price**: ${ratings['Average Target Price']}")
     st.markdown(f"- **Price Target Range**: ${ratings['Low Target Price']} – ${ratings['High Target Price']}")
 
-    # Sentiment Summary
-    st.markdown("### 🗝 Sentiment Summary")
-    sentiment = get_sentiment_summary(ticker)
-    st.markdown(f"- **Sentiment Score**: {sentiment['Sentiment Score']}")
-    st.markdown(f"- **Sentiment Trend**: {sentiment['Sentiment Trend']}")
-    if sentiment['AI Summary']:
-        st.markdown(f"**AI Sentiment Insight**: {sentiment['AI Summary']}")
+    # Stock Sentiment
+    st.markdown("### 🗝 Stock Sentiment Summary")
+    sentiment_score, trend_label, sentiments, key_drivers = get_stock_sentiment(ticker)
+    st.write(f"**Sentiment Score**: {sentiment_score} ({trend_label})")  # Corrected line
+    st.write(f"**Key drivers of sentiment**:")
+    for driver in key_drivers:
+        st.write(f"- {driver}")
 
-    # AI Summary
-    st.markdown("### 🤖 AI Insights")
-    ai_summary = get_stock_summary(ticker, f"Price={price}, Volatility={info.get('beta', 'N/A')}, Sector={info.get('sector', 'N/A')}")
-    st.markdown(ai_summary)
-
-    # News
-    st.markdown("### 📰 Recent News")
-    news_items = fetch_news_headlines(ticker)
-    if news_items:
-        for title, link in news_items:
-            st.markdown(f"- [{title}]({link})")
-    else:
-        st.info("News currently unavailable.")
+    st.markdown("### Detailed Sentiment by Article:")
+    for sentiment in sentiments:
+        st.write(f"- **{sentiment['title']}** (Sentiment: {sentiment['sentiment']}, Polarity: {sentiment['polarity']})")
