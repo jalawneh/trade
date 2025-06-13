@@ -6,9 +6,7 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 from utils.openai_helper import get_stock_summary, get_risk_assessment, get_momentum_analysis, get_sentiment_analysis
-import os
 
-USE_OPENAI = os.getenv("USE_OPENAI", "false").lower() == "true"
 
 def get_analyst_ratings(ticker):
     stock = yf.Ticker(ticker)
@@ -36,6 +34,7 @@ def get_analyst_ratings(ticker):
             'High Target Price': 'N/A'
         }
 
+
 def get_sentiment_summary(ticker):
     try:
         response = requests.get(f'https://api.swaggystocks.com/api/v1/sentiment/{ticker}')
@@ -43,24 +42,16 @@ def get_sentiment_summary(ticker):
         sentiment_score = data.get('sentiment_score', 'N/A')
         sentiment_trend = data.get('sentiment_trend', 'N/A')
 
-        ai_sentiment = ""
-        if USE_OPENAI:
-            headlines = fetch_news_headlines(ticker)
-            if headlines:
-                combined_headlines = "\n".join([h[0] for h in headlines])
-                ai_sentiment = get_sentiment_analysis(combined_headlines)
-
         return {
             'Sentiment Score': sentiment_score,
-            'Sentiment Trend': sentiment_trend,
-            'AI Summary': ai_sentiment
+            'Sentiment Trend': sentiment_trend
         }
     except Exception:
         return {
             'Sentiment Score': 'N/A',
-            'Sentiment Trend': 'N/A',
-            'AI Summary': ''
+            'Sentiment Trend': 'N/A'
         }
+
 
 def fetch_news_headlines(ticker):
     headlines = []
@@ -89,6 +80,7 @@ def fetch_news_headlines(ticker):
         pass
 
     return headlines
+
 
 def display_stock_dashboard(ticker):
     st.markdown(f"## 📊 {ticker.upper()} Stock Dashboard (NYSE: {ticker.upper()})")
@@ -146,8 +138,6 @@ def display_stock_dashboard(ticker):
     sentiment = get_sentiment_summary(ticker)
     st.markdown(f"- **Sentiment Score**: {sentiment['Sentiment Score']}")
     st.markdown(f"- **Sentiment Trend**: {sentiment['Sentiment Trend']}")
-    if sentiment['AI Summary']:
-        st.markdown(f"**AI Sentiment Insight**: {sentiment['AI Summary']}")
 
     # AI Summary
     st.markdown("### 🤖 AI Insights")
