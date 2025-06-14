@@ -131,7 +131,7 @@ def display_stock_dashboard(ticker):  # Ensure ticker is passed as a parameter
     st.markdown(f"## 📊 {ticker.upper()} Stock Dashboard (NYSE: {ticker.upper()})")
 
     stock = yf.Ticker(ticker)
-    hist = stock.history(period="5d", interval="1h")
+    hist = stock.history(period="30d", interval="1h")
     info = stock.info
 
     # Stock Overview
