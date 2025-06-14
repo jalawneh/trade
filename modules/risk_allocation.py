@@ -1,10 +1,10 @@
 import streamlit as st
-from utils.openai_helper import call_openai_chat, is_ai_enabled
+import pandas as pd
 import requests
 from bs4 import BeautifulSoup
 from textblob import TextBlob
+from utils.openai_helper import call_openai_chat, is_ai_enabled
 
-# Define a dictionary of scraping functions for different sites
 def scrape_yahoo_finance():
     url = 'https://finance.yahoo.com'
     response = requests.get(url)
@@ -38,7 +38,6 @@ def scrape_marketwatch():
         articles.append({'title': title, 'link': link})
     return articles
 
-# Sentiment analysis function
 def analyze_sentiment(articles):
     sentiments = []
     for article in articles:
@@ -53,24 +52,13 @@ def analyze_sentiment(articles):
         sentiments.append({'title': article['title'], 'sentiment': sentiment, 'polarity': polarity})
     return sentiments
 
-# Function to scrape from multiple sources and perform sentiment analysis
 def get_market_sentiment():
-    # Scrape articles from multiple sources
-    articles = []
-    articles.extend(scrape_yahoo_finance())
-    articles.extend(scrape_cnbc())
-    articles.extend(scrape_marketwatch())
-    
-    # Add more scraping calls here for additional sites...
-
-    # Analyze sentiment
+    articles = scrape_yahoo_finance() + scrape_cnbc() + scrape_marketwatch()
     sentiments = analyze_sentiment(articles)
 
-    # Summarize sentiment
-    bullish_count = sum(1 for sentiment in sentiments if sentiment['sentiment'] == 'Bullish')
-    bearish_count = sum(1 for sentiment in sentiments if sentiment['sentiment'] == 'Bearish')
+    bullish_count = sum(1 for s in sentiments if s['sentiment'] == 'Bullish')
+    bearish_count = sum(1 for s in sentiments if s['sentiment'] == 'Bearish')
 
-    # Provide final sentiment score and trend
     if bullish_count > bearish_count:
         trend_label = 'Bullish'
         sentiment_score = 7
@@ -81,30 +69,49 @@ def get_market_sentiment():
         trend_label = 'Neutral'
         sentiment_score = 5
 
-    # Expanded market insights (key drivers)
     key_drivers = []
-    if bullish_count > bearish_count:
-        key_drivers.append("Positive earnings reports from major corporations indicate strong market confidence.")
-        key_drivers.append("Growth in major stock indices like S&P 500 and Nasdaq reflecting investor optimism.")
-    elif bearish_count > bullish_count:
-        key_drivers.append("Increased geopolitical instability, including trade tensions and political unrest, is dampening market sentiment.")
-        key_drivers.append("High levels of volatility in the VIX indicate market fear and risk aversion.")
+    if trend_label == 'Bullish':
+        key_drivers += [
+            "Positive earnings reports from major corporations indicate strong market confidence.",
+            "Growth in major stock indices like S&P 500 and Nasdaq reflecting investor optimism."
+        ]
+    elif trend_label == 'Bearish':
+        key_drivers += [
+            "Increased geopolitical instability, including trade tensions and political unrest, is dampening market sentiment.",
+            "High levels of volatility in the VIX indicate market fear and risk aversion."
+        ]
     else:
         key_drivers.append("Mixed economic indicators, with strong GDP growth but concerns over inflation and interest rates.")
-    
-    # Additional insights: Volatility, Earnings Reports, Economic Indicators
+
     key_drivers.append("Recent volatility in stock markets and concerns over inflation and interest rates are driving mixed sentiment.")
 
     return sentiment_score, trend_label, sentiments, key_drivers
 
+def classify_stock_risk_tiers(df):
+    def classify_row(volatility, ai_score):
+        if volatility < 2.0 and ai_score >= 7:
+            return "Low Risk"
+        elif 2.0 <= volatility < 3.5 and 5 <= ai_score < 7:
+            return "Medium Risk"
+        else:
+            return "High Risk"
+    df["Risk Tier"] = df.apply(
+        lambda row: classify_row(row["Volatility (%)"], row["AI Recommendation (0–10)"]),
+        axis=1
+    )
+    return df
+
 def show_risk_allocation():
     st.title("⚖️ Set Risk Allocation")
+
+    st.markdown("### 🎛️ Your Risk Preferences")
     with st.form("allocation_form"):
         col1, col2, col3 = st.columns(3)
         low = col1.number_input("Low Risk %", 0, 100, st.session_state.low_risk)
         med = col2.number_input("Medium Risk %", 0, 100, st.session_state.med_risk)
         high = col3.number_input("High Risk %", 0, 100, st.session_state.high_risk)
         submitted = st.form_submit_button("Save Allocation")
+
     if submitted:
         if low + med + high != 100:
             st.error("❌ The total must equal 100%.")
@@ -114,32 +121,111 @@ def show_risk_allocation():
             st.session_state.high_risk = high
             st.success("✅ Allocations saved.")
 
+    # --- Market Sentiment Analysis ---
     if is_ai_enabled():
         st.markdown("---")
-        st.markdown("### 🤖 AI Suggestion")
+        st.markdown("### 🤖 AI Market Sentiment")
 
-        # Get sentiment analysis based on scraped news
         sentiment_score, trend_label, sentiments, key_drivers = get_market_sentiment()
-        
-        # Display sentiment analysis results
         st.info(f"Sentiment Score: {sentiment_score}")
         st.info(f"Trend Label: {trend_label}")
+
         st.markdown("### 🗭 Sentiment Summary")
-        
-        # Add a detailed summary of the sentiment
-        st.write(f"Sentiment Score of {sentiment_score} suggests a {trend_label} market.")
-        st.write(f"Key drivers of sentiment include:")
+        st.write(f"The market is currently **{trend_label}** with a sentiment score of {sentiment_score}.")
+        st.write("**Key Drivers:**")
         for driver in key_drivers:
             st.write(f"- {driver}")
 
-        st.markdown("### Detailed Sentiment by Article:")
-        for sentiment in sentiments:
-            st.write(f"- **{sentiment['title']}** (Sentiment: {sentiment['sentiment']}, Polarity: {sentiment['polarity']})")
+        with st.expander("📋 Full News Breakdown"):
+            for s in sentiments:
+                st.write(f"- **{s['title']}** (Sentiment: {s['sentiment']}, Polarity: {s['polarity']:.2f})")
 
-        # Provide more detailed suggestions based on sentiment
         if sentiment_score < 4:
-            st.warning("Market sentiment is bearish. Consider reducing exposure to high-risk assets and increasing allocation to safe-haven assets.")
+            st.warning("📉 Bearish market — consider reducing exposure to high-risk assets.")
         elif sentiment_score > 6:
-            st.success("Market sentiment is bullish. Consider increasing allocation to higher-risk, higher-reward assets.")
+            st.success("📈 Bullish market — higher-risk positions may be rewarded.")
         else:
-            st.info("Market sentiment is neutral. Maintain balanced risk allocation or wait for clearer signals.")
+            st.info("⚖️ Neutral market — maintain a balanced risk distribution.")
+
+    # --- Risk Tier Classification ---
+    if 'top10' not in st.session_state:
+        st.warning("⚠️ Please run the Market Scan first.")
+        return
+
+    df = st.session_state.get("top10", pd.DataFrame())
+
+    # ✅ Strip and normalize column names
+    df.columns = (
+        df.columns.str.encode("ascii", "ignore").str.decode("ascii")
+        .str.strip()
+        .str.replace("\u00a0", " ")
+        .str.replace("–", "-")
+        .str.replace("—", "-")
+        .str.replace(r"[^a-zA-Z0-9 ()%-]", "", regex=True)
+    )
+
+    # Attempt to rename damaged columns
+    for col in df.columns:
+        if "AI Recommendation" in col and "10" in col:
+            df.rename(columns={col: "AI Recommendation (0-10)"}, inplace=True)
+        if "Last Close" in col:
+            df.rename(columns={col: "Last Close ($)"}, inplace=True)
+
+    # Check required columns
+    if not all(col in df.columns for col in ["Volatility (%)", "AI Recommendation (0-10)"]):
+        st.error("❌ One or both required columns are missing from the DataFrame.")
+        return
+
+    if df.empty:
+        st.warning("⚠️ No market scan results found. Please run the Market Scan first.")
+        return
+
+    required_columns = ["Volatility (%)", "AI Recommendation (0-10)"]
+    for col in required_columns:
+        if col not in df.columns:
+            st.error(f"❌ Required column missing: {col}")
+            return
+        if df[col].isnull().all():
+            st.error(f"❌ Column {col} contains only null values.")
+            return
+
+    st.markdown("---")
+    st.markdown("### 📊 Risk Classification of Candidates")
+
+    def classify_stock_risk_tiers(df):
+        def classify_row(volatility, ai_score):
+            if volatility < 2.0 and ai_score >= 7:
+                return "Low"
+            elif 2.0 <= volatility < 3.5 and 5 <= ai_score < 7:
+                return "Medium"
+            else:
+                return "High"
+
+        df["Risk Tier"] = df.apply(
+            lambda row: classify_row(row["Volatility (%)"], row["AI Recommendation (0-10)"]),
+            axis=1
+        )
+        return df
+
+    classified = classify_stock_risk_tiers(df)
+    st.session_state['allocated_stocks'] = classified
+
+    COLOR_MAP = {
+        "Low": "#D1E7DD",       # Light green
+        "Medium": "#FFF3CD",    # Light yellow
+        "High": "#F8D7DA"       # Light red
+    }
+
+    for tier in ['Low', 'Medium', 'High']:
+        group = classified[classified['Risk Tier'] == tier]
+        st.markdown(f"#### {tier} Risk Stocks ({len(group)})")
+        if group.empty:
+            st.write("- None")
+        else:
+            styled = group[['Ticker', 'Company Name', 'AI Recommendation (0-10)', 'Volatility (%)', 'Score']].style.apply(
+                lambda _: [f"background-color: {COLOR_MAP[tier]}"] * 5,
+                axis=1
+            )
+            st.dataframe(styled, use_container_width=True)
+
+    st.success("✅ Stocks classified into risk tiers and ready for allocation!")

@@ -1,32 +1,40 @@
-# modules/profit_plan.py
 import streamlit as st
 import pandas as pd
 import yfinance as yf
-import os
 from modules.stock_dashboard import display_stock_dashboard
 from utils.openai_helper import get_final_score_justification
+import os
 
 USE_OPENAI = os.getenv("USE_OPENAI", "False").lower() == "true"
 
 def show_profit_plan():
     st.title("\U0001F4B0 Smart Profit Plan")
 
-    if 'top10' not in st.session_state:
-        st.warning("⚠️ Please run the Market Scan first to generate stock data.")
+    if 'allocated_stocks' not in st.session_state:
+        st.warning("⚠️ Please run the Risk Allocation module first.")
         return
 
-    def get_ranked_candidates():
-        top = st.session_state['top10']
-        top['Risk Score'] = top.apply(lambda r: (10 - r['AI Recommendation (0–10)']) + r['Volatility (%)'] / 10, axis=1)
-        return top.sort_values(by=['Risk Score', 'AI Recommendation (0–10)'], ascending=[True, False]).copy()
+    st.markdown("### \U0001F4C8 Plan Configuration")
+    budget = st.number_input("Enter your total investment budget ($):", min_value=100, value=3000)
+    profit_goal = st.number_input("Enter your desired profit goal ($):", min_value=10, value=100)
 
-    candidates = get_ranked_candidates()
-    plan, total_spent, total_profit = simulate_plan(candidates)
+    # Fetch allocation percentages
+    risk_allocations = {
+        "Low": st.session_state.low_risk,
+        "Medium": st.session_state.med_risk,
+        "High": st.session_state.high_risk
+    }
+
+    plan, total_spent, total_profit = simulate_plan(
+        df=st.session_state['allocated_stocks'],
+        budget=budget,
+        allocations=risk_allocations
+    )
 
     if plan:
         st.subheader("\U0001F4CA Profit Plan")
         st.write(f"Total Investment: ${total_spent:.2f}")
-        st.write(f"Expected Profit: ${total_profit:.2f}")
+        st.write(f"Expected Profit: ${total_profit:.2f} (Goal: ${profit_goal:.2f})")
         plan_df = pd.DataFrame(plan)
         st.dataframe(plan_df)
 
@@ -38,36 +46,27 @@ def show_profit_plan():
                 st.info(justification)
 
     else:
-        st.warning("Unable to generate a profit plan with the current data.")
+        st.warning("No suitable stocks met the profit criteria for your budget.")
 
-def simulate_plan(candidates, budget=3000):
+def simulate_plan(df, budget, allocations):
     plan = []
     total_spent = total_profit = 0
-    used_tickers = set()
 
-    grouped = candidates.groupby("Risk Score")
-    max_allocation_per_stock = budget * 0.33
+    for tier in ["Low", "Medium", "High"]:
+        tier_df = df[df['Risk Tier'] == tier]
+        tier_budget = budget * (allocations[tier] / 100)
 
-    for risk_score, group in grouped:
-        group_sorted = group.sort_values(by="Score", ascending=False).reset_index(drop=True)
-        normalized_weights = [(1 / (1 + row['Risk Score'])) for _, row in group_sorted.iterrows()]
-        weight_sum = sum(normalized_weights)
+        if tier_df.empty or tier_budget < 1:
+            continue
 
-        for i, (_, row) in enumerate(group_sorted.iterrows()):
-            if row['Ticker'] in used_tickers:
+        sorted_tier = tier_df.sort_values(by=["Score"], ascending=False).reset_index(drop=True)
+
+        for _, row in sorted_tier.iterrows():
+            price = row.get("Last Close ($)", 0)
+            if price == 0:
                 continue
 
-            share_weight = normalized_weights[i] / weight_sum
-            allocation = min(budget * share_weight, max_allocation_per_stock)
-            if len(group_sorted) > 1 and allocation > budget * 0.15:
-                allocation = budget * 0.15
-
-            remaining_budget = budget - total_spent
-            allocation = min(allocation, remaining_budget)
-
-            price = row['Last Close ($)']
-            ticker = row['Ticker']
-            stock = yf.Ticker(ticker)
+            stock = yf.Ticker(row['Ticker'])
             hist = stock.history(period="2d", interval="1h")
             peak_48h = hist['High'].max() if not hist.empty else price
 
@@ -75,10 +74,8 @@ def simulate_plan(candidates, budget=3000):
             est_price = price * (1 + volatility / 100)
             sell_price = max(est_price, peak_48h)
 
-            max_shares = int(allocation / price)
-
+            max_shares = int(tier_budget / price)
             if max_shares <= 0:
-                st.info(f"⛔ Skipping {row['Ticker']} - not enough budget for even one share.")
                 continue
 
             invest = max_shares * price
@@ -87,10 +84,7 @@ def simulate_plan(candidates, budget=3000):
             potential_roi = (profit / budget) * 100
 
             if profit < 5 or roi < 0.015 or invest < 50:
-                st.info(f"❌ {row['Ticker']} filtered out - Profit: ${profit:.2f}, ROI: {roi:.2f}, Invest: ${invest:.2f}")
                 continue
-
-            st.success(f"✅ Added {row['Ticker']} - Profit: ${profit:.2f}, ROI: {roi:.2f}")
 
             plan.append({
                 'Ticker': row['Ticker'],
@@ -100,13 +94,16 @@ def simulate_plan(candidates, budget=3000):
                 'Invest': round(invest, 2),
                 'Profit': round(profit, 2),
                 'ROI % of Budget': round(potential_roi, 2),
-                'AI Score': row['AI Recommendation (0–10)'],
+                'AI Score': row['AI Recommendation (0-10)'],
                 'Volatility %': row['Volatility (%)'],
-                'Risk Score': round(row['Risk Score'], 2)
+                'Risk Tier': tier
             })
 
             total_spent += invest
             total_profit += profit
-            used_tickers.add(row['Ticker'])
+
+            tier_budget -= invest
+            if tier_budget < price:
+                break
 
     return plan, total_spent, total_profit
